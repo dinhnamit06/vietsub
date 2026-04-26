@@ -1,0 +1,33 @@
+# Thư mục môi trường ảo Python
+venv/
+env/
+.env
+
+# Thư mục rác/cache của Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# File cấu hình (TUYỆT ĐỐI KHÔNG ĐƯỢC ĐẨY LÊN VÌ CHỨA API KEY)
+config.json
+
+# Thư mục xử lý video/âm thanh của App
+temp/
+input/
+output/
+*.mp4
+*.wav
+*.mp3
+*.srt
+
+# Thư mục build exe của PyInstaller
+build/
+dist/
+*.spec
+
+# File hệ điều hành & IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
