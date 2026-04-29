@@ -531,6 +531,210 @@ class WorkerDownloadVideo(QThread):
             self.log.emit(f"[LỖI TẢI VIDEO] {str(e)}")
             self.work_done.emit(False, "")
 
+
+from core.ai_factory import prepare_clips, random_mashup_videos, spin_script, analyze_image_for_video
+
+class WorkerAIFactory(QThread):
+    progress = pyqtSignal(int, str)
+    log = pyqtSignal(str)
+    work_done = pyqtSignal(bool, object)
+
+    def __init__(self, mode, input_dir, output_dir, num_videos, clip_duration, config, original_script="", image_path="", keyword="", source_type="youtube", use_ai_spin=True):
+        super().__init__()
+        self.mode = mode
+        self.input_dir = input_dir
+        self.output_dir = output_dir
+        self.num_videos = num_videos
+        self.clip_duration = clip_duration
+        self.config = config
+        self.original_script = original_script
+        self.image_path = image_path
+        self.keyword = keyword
+        self.source_type = source_type
+        self.use_ai_spin = use_ai_spin
+
+    def run(self):
+        try:
+            self.log.emit(f"--- BẮT ĐẦU XƯỞNG AI ({self.mode.upper()}) ---")
+            
+            if self.mode in ["mashup", "img2vid"] and not os.path.exists(self.output_dir):
+                os.makedirs(self.output_dir)
+                
+            temp_dir = os.path.join(self.output_dir, "temp_clips") if self.mode in ["mashup", "img2vid"] else ""
+            
+            if self.mode == "img2vid":
+                new_script = ""
+                search_keyword = self.keyword
+                
+                # --- NẾU DÙNG AI XÀO KỊCH BẢN ---
+                if self.use_ai_spin:
+                    gemini_key = self.config.get("gemini_api_key", "")
+                    if not gemini_key:
+                        raise Exception("Chưa cài đặt Gemini API Key ở Tab Cài đặt Hệ thống!")
+                    
+                    if self.keyword:
+                        self.progress.emit(10, "Đang dùng AI tạo kịch bản từ tên sản phẩm...")
+                        self.log.emit(f"Từ khoá người dùng nhập: {self.keyword}")
+                        
+                        from core.ai_factory import spin_script
+                        new_script = spin_script(
+                            f"Sản phẩm: {self.keyword}", 
+                            gemini_key, 
+                            prompt_style="Hãy viết 1 đoạn kịch bản lồng tiếng review bán hàng ngắn (3-4 câu, 15-20s) bằng tiếng Việt cực kỳ hấp dẫn, giật tít cho sản phẩm này trên TikTok."
+                        )
+                        self.log.emit(f"Kịch bản AI sinh ra: {new_script}")
+                    else:
+                        self.progress.emit(10, "Đang dùng AI Vision phân tích ảnh sản phẩm...")
+                        self.log.emit("Đang phân tích hình ảnh...")
+                        from core.ai_factory import analyze_image_for_video
+                        search_keyword, new_script = analyze_image_for_video(self.image_path, gemini_key, source_type=self.source_type)
+                        self.log.emit(f"Từ khoá tìm kiếm: {search_keyword}")
+                        self.log.emit(f"Kịch bản AI sinh ra: {new_script}")
+                else:
+                    # KHÔNG DÙNG AI XÀO KỊCH BẢN (Chuyên Reup)
+                    self.log.emit("Chế độ Reup Thuần Túy: Bỏ qua tạo kịch bản AI.")
+                    if not search_keyword:
+                        # Nếu người dùng không nhập tên, phải dùng tạm tên file ảnh
+                        search_keyword = os.path.splitext(os.path.basename(self.image_path))[0].replace("-", " ").replace("_", " ")
+                        self.log.emit(f"Dùng tên file làm từ khoá: {search_keyword}")
+                
+                self.progress.emit(30, f"Đang lên mạng tải video theo từ khoá: {search_keyword}...")
+                dl_dir = os.path.join(self.output_dir, "raw_downloads")
+                if not os.path.exists(dl_dir): os.makedirs(dl_dir)
+                
+                import yt_dlp
+                ydl_opts = {
+                    'outtmpl': os.path.join(dl_dir, '%(id)s.%(ext)s'),
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                    'noplaylist': True,
+                    'quiet': True,
+                    'max_downloads': 5, # Tải 5 video đầu tiên
+                    'match_filter': yt_dlp.utils.match_filter_func("duration < 180") # Chỉ lấy video ngắn dưới 3 phút
+                }
+                
+                class Logger:
+                    def __init__(self, log_sig): self.log_sig = log_sig
+                    def debug(self, msg): pass
+                    def warning(self, msg): pass
+                    def error(self, msg): self.log_sig.emit(f"[LỖI yt-dlp] {msg}")
+                
+                ydl_opts['logger'] = Logger(self.log)
+                
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        self.log.emit("Bắt đầu tải video nguyên liệu...")
+                        ydl.extract_info(f"ytsearch5:{search_keyword} shorts", download=True)
+                except Exception as e:
+                    self.log.emit(f"Có lỗi khi tải 1 số video (có thể bỏ qua): {e}")
+                    
+                import glob
+                downloaded_files = glob.glob(os.path.join(dl_dir, "*.mp4"))
+                if not downloaded_files:
+                    raise Exception("Không tìm thấy video nào để tải về!")
+                    
+                # PHÂN NHÁNH XỬ LÝ THEO CHẾ ĐỘ
+                if self.use_ai_spin:
+                    self.progress.emit(60, "Đang phân tích và cắt các video raw...")
+                    from core.ai_factory import prepare_clips, random_mashup_videos
+                    clips = prepare_clips(dl_dir, temp_dir, self.clip_duration)
+                    self.log.emit(f"Đã tạo ra {len(clips)} clip ngắn.")
+                    
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    max_workers = max(1, os.cpu_count() - 1)
+                    self.log.emit(f"Khởi động Render Farm: {max_workers} luồng xử lý song song...")
+                    
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        futures = []
+                        import random
+                        import time
+                        for i in range(self.num_videos):
+                            out_name = f"AutoVid_{int(time.time())}_{i+1}.mp4"
+                            out_path = os.path.join(self.output_dir, out_name)
+                            target_dur = random.randint(15, 25)
+                            futures.append(executor.submit(random_mashup_videos, list(clips), out_path, target_duration=target_dur))
+                        
+                        completed = 0
+                        for future in as_completed(futures):
+                            completed += 1
+                            self.progress.emit(60 + int(35 * (completed / self.num_videos)), f"Đang mix video {completed}/{self.num_videos}...")
+                            self.log.emit(f"Hoàn thành 1 video (tổng: {completed}/{self.num_videos})")
+                else:
+                    self.progress.emit(60, "Đang áp dụng bộ lọc Lách Bản Quyền chuyên sâu...")
+                    from core.ai_factory import apply_random_anti_reup
+                    import random
+                    import time
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    max_workers = max(1, os.cpu_count() - 1)
+                    self.log.emit(f"Khởi động Render Farm: {max_workers} luồng xử lý song song...")
+                    
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        futures = []
+                        for i in range(self.num_videos):
+                            in_vid = random.choice(downloaded_files)
+                            out_name = f"ReupPro_{int(time.time())}_{i+1}.mp4"
+                            out_path = os.path.join(self.output_dir, out_name)
+                            futures.append(executor.submit(apply_random_anti_reup, in_vid, out_path))
+                        
+                        completed = 0
+                        for future in as_completed(futures):
+                            completed += 1
+                            self.progress.emit(60 + int(35 * (completed / self.num_videos)), f"Đang render video {completed}/{self.num_videos}...")
+                            self.log.emit(f"Hoàn thành 1 video (tổng: {completed}/{self.num_videos})")
+                    
+                self.progress.emit(95, "Đang dọn dẹp file rác...")
+                import shutil
+                if os.path.exists(temp_dir): shutil.rmtree(temp_dir, ignore_errors=True)
+                if os.path.exists(dl_dir): shutil.rmtree(dl_dir, ignore_errors=True)
+                    
+                self.progress.emit(100, "Hoàn tất!")
+                self.work_done.emit(True, {"out_dir": self.output_dir, "script": new_script})
+                
+            elif self.mode == "mashup":
+                self.progress.emit(10, "Đang phân tích và cắt các video raw...")
+                self.log.emit(f"Đang tìm và cắt video trong: {self.input_dir}")
+                
+                from core.ai_factory import prepare_clips, random_mashup_videos
+                clips = prepare_clips(self.input_dir, temp_dir, self.clip_duration)
+                self.log.emit(f"Đã tạo ra {len(clips)} clip ngắn.")
+                
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                import time
+                import random
+                max_workers = max(1, os.cpu_count() - 1)
+                self.log.emit(f"Khởi động Render Farm: {max_workers} luồng xử lý song song...")
+                
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = []
+                    for i in range(self.num_videos):
+                        out_name = f"Mashup_{int(time.time())}_{i+1}.mp4"
+                        out_path = os.path.join(self.output_dir, out_name)
+                        target_dur = random.randint(15, 25)
+                        futures.append(executor.submit(random_mashup_videos, list(clips), out_path, target_duration=target_dur))
+                    
+                    completed = 0
+                    for future in as_completed(futures):
+                        completed += 1
+                        self.progress.emit(10 + int(80 * (completed / self.num_videos)), f"Đang mix video {completed}/{self.num_videos}...")
+                        self.log.emit(f"Hoàn thành 1 video (tổng: {completed}/{self.num_videos})")
+                    
+                self.progress.emit(95, "Đang dọn dẹp file rác...")
+                import shutil
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    
+                self.progress.emit(100, "Hoàn tất!")
+                self.log.emit(f"--- HOÀN THÀNH MIX {self.num_videos} VIDEO ---")
+                self.work_done.emit(True, self.output_dir)
+                
+            elif self.mode == "spin":
+                gemini_key = self.config.get("gemini_api_key", "")
+                if not gemini_key:
+                    raise Exception("Chưa cài đặt Gemini API Key ở Tab Cài đặt Hệ thống!")
+                    
+                self.progress.emit(20, "Đang gọi AI viết lại kịch bản...")
+                self.log.emit("Đang dùng Gemini để spin kịch bản...")
+                
+                from core.ai_factory import spin_script
                 new_script = spin_script(
                     self.original_script, 
                     gemini_key, 
@@ -546,7 +750,6 @@ class WorkerDownloadVideo(QThread):
         except Exception as e:
             self.log.emit(f"[LỖI XƯỞNG AI] {str(e)}")
             self.work_done.emit(False, None)
-
 class WorkerExtractScript(QThread):
     progress = pyqtSignal(int, str)
     log = pyqtSignal(str)

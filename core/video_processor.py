@@ -46,7 +46,7 @@ def extract_preview_frame(video_path, output_dir="temp"):
         print("FFmpeg extract frame error:", e.stderr.decode('utf-8') if e.stderr else str(e))
         return None
 
-def srt_to_ass(srt_path, ass_path, video_width, video_height, font_size, font_color, outline_color, outline_width, margin_v, speed=1.0, border_style=1):
+def srt_to_ass(srt_path, ass_path, video_width, video_height, font_size, font_color, outline_color, outline_width, margin_v, speed=1.0, border_style=1, bouncing_sub=False):
     # Đọc nội dung SRT
     with open(srt_path, 'r', encoding='utf-8-sig') as f:
         srt_content = f.read().strip()
@@ -113,11 +113,42 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 
                 prev_end_sec = end_sec
                 
-                start_ass = seconds_to_ass_time(start_sec)
-                end_ass = seconds_to_ass_time(end_sec)
-                
                 text = "\\N".join(lines[2:])
-                ass_content += f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}\n"
+                full_text = " ".join(lines[2:]).strip()
+                
+                if bouncing_sub and full_text:
+                    words = full_text.split()
+                    chunks = []
+                    current_chunk = []
+                    for word in words:
+                        current_chunk.append(word)
+                        if len(current_chunk) >= 2 or len(" ".join(current_chunk)) > 12:
+                            chunks.append(" ".join(current_chunk))
+                            current_chunk = []
+                    if current_chunk:
+                        chunks.append(" ".join(current_chunk))
+                        
+                    total_chars = sum(len(c) for c in chunks)
+                    if total_chars == 0: total_chars = 1
+                    
+                    total_duration = end_sec - start_sec
+                    current_start = start_sec
+                    
+                    for chunk in chunks:
+                        chunk_dur = total_duration * (len(chunk) / total_chars)
+                        chunk_end = current_start + chunk_dur
+                        
+                        start_ass = seconds_to_ass_time(current_start)
+                        end_ass = seconds_to_ass_time(chunk_end)
+                        
+                        anim_tag = "{\\fscx50\\fscy50\\t(0,100,\\fscx120\\fscy120)\\t(100,250,\\fscx100\\fscy100)}"
+                        ass_content += f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{anim_tag}{chunk}\\N\n"
+                        
+                        current_start = chunk_end
+                else:
+                    start_ass = seconds_to_ass_time(start_sec)
+                    end_ass = seconds_to_ass_time(end_sec)
+                    ass_content += f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}\n"
 
     with open(ass_path, 'w', encoding='utf-8-sig') as f:
         f.write(ass_content)
@@ -274,7 +305,7 @@ def process_video(video_path, dubbed_audio_path, srt_path, output_path, bg_volum
         # Convert SRT to ASS (Dùng kích thước video mới nhất)
         ass_path = os.path.join("temp", "render_subtitles.ass")
         border_style = adv_config.get("sub_border_style", 1) if adv_config else 1
-        srt_to_ass(srt_path, ass_path, video_w, video_h, font_size, font_color, outline_color, outline_width, sub_margin_v, speed=speed, border_style=border_style)
+        srt_to_ass(srt_path, ass_path, video_w, video_h, font_size, font_color, outline_color, outline_width, sub_margin_v, speed=speed, border_style=border_style, bouncing_sub=adv_config.get("bouncing_sub", False))
         ass_filter_path = ass_path.replace('\\', '/')
             
         # 5.6 Bo góc Video

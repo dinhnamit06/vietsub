@@ -1069,6 +1069,10 @@ class AutoVietsubApp(QMainWindow):
         self.chk_enable_sub = QCheckBox("Gắn Phụ đề (Subtitle) vào video")
         self.chk_enable_sub.setChecked(True)
         v_basic.addWidget(self.chk_enable_sub)
+        
+        self.chk_bouncing_sub = QCheckBox("🔥 Phụ Đề Chữ Nảy (Hiệu ứng CapCut/MrBeast)")
+        self.chk_bouncing_sub.setChecked(False)
+        v_basic.addWidget(self.chk_bouncing_sub)
         scroll_layout.addWidget(g_basic)
         
         # --- Group 2: Màu sắc & Lớp phủ ---
@@ -1245,6 +1249,8 @@ class AutoVietsubApp(QMainWindow):
         self.slider_h.setValue(self.config.get("blur_h", 30))
         
         self.chk_enable_sub.setChecked(self.config.get("adv_enable_sub", True))
+        if hasattr(self, 'chk_bouncing_sub'):
+            self.chk_bouncing_sub.setChecked(self.config.get("bouncing_sub", False))
         self.slider_bright.setValue(self.config.get("adv_bright", 0))
         self.slider_contrast.setValue(self.config.get("adv_contrast", 0))
         self.slider_saturation.setValue(self.config.get("adv_sat", 100))
@@ -1414,6 +1420,8 @@ class AutoVietsubApp(QMainWindow):
             self.config["blur_h"] = self.slider_h.value()
             
             self.config["adv_enable_sub"] = self.chk_enable_sub.isChecked()
+            if hasattr(self, 'chk_bouncing_sub'):
+                self.config["bouncing_sub"] = self.chk_bouncing_sub.isChecked()
             self.config["adv_bright"] = self.slider_bright.value()
             self.config["adv_contrast"] = self.slider_contrast.value()
             self.config["adv_sat"] = self.slider_saturation.value()
@@ -2036,6 +2044,7 @@ class AutoVietsubApp(QMainWindow):
                 "vol": self.slider_bgm_vol.value() / 100.0
             },
             "enable_sub": self.chk_enable_sub.isChecked(),
+            "bouncing_sub": self.chk_bouncing_sub.isChecked() if hasattr(self, 'chk_bouncing_sub') else False,
             "color_eq": {
                 "brightness": self.slider_bright.value() / 100.0,
                 "contrast": 1.0 + (self.slider_contrast.value() / 100.0),
@@ -2385,6 +2394,7 @@ class AutoVietsubApp(QMainWindow):
         # Đóng gói cấu hình Nâng cao
         adv_config = {
             "enable_sub": self.chk_enable_sub.isChecked(),
+            "bouncing_sub": self.chk_bouncing_sub.isChecked() if hasattr(self, 'chk_bouncing_sub') else False,
             "render_hw": self.combo_render_hw.currentText() if hasattr(self, 'combo_render_hw') else "Tự động quét GPU (Khuyên dùng)",
             "color_eq": {
                 "brightness": self.slider_bright.value() / 100.0,
