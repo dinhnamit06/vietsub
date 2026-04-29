@@ -1,7 +1,7 @@
 # Tệp chứa chuỗi Style (CSS dành cho Qt)
 MODERN_QSS = """
 /* Tổng quan cửa sổ */
-QMainWindow {
+QWidget {
     background-color: #1E1E2E; /* Nền tối hiện đại (Catppuccin Mocha) */
     color: #CDD6F4;
 }

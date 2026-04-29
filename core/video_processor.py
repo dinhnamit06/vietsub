@@ -46,7 +46,7 @@ def extract_preview_frame(video_path, output_dir="temp"):
         print("FFmpeg extract frame error:", e.stderr.decode('utf-8') if e.stderr else str(e))
         return None
 
-def srt_to_ass(srt_path, ass_path, video_width, video_height, font_size, font_color, outline_color, outline_width, margin_v, speed=1.0):
+def srt_to_ass(srt_path, ass_path, video_width, video_height, font_size, font_color, outline_color, outline_width, margin_v, speed=1.0, border_style=1):
     # Đọc nội dung SRT
     with open(srt_path, 'r', encoding='utf-8-sig') as f:
         srt_content = f.read().strip()
@@ -81,7 +81,10 @@ def srt_to_ass(srt_path, ass_path, video_width, video_height, font_size, font_co
     }
     
     ass_font_color = hex_to_ass_color(color_map.get(font_color, "#FFFF00"))
+    
+    # ASS BackColour &H00BBGGRR (Đặc 100% = 00 Hex để che kín chữ gốc)
     ass_outline_color = hex_to_ass_color(color_map.get(outline_color, "#000000"))
+    ass_back_color = ass_outline_color if border_style == 3 else "&H00000000"
     
     # Tạo Header ASS
     ass_content = f"""[Script Info]
@@ -93,12 +96,13 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,{font_size},{ass_font_color},&H000000FF,{ass_outline_color},&H00000000,-1,0,0,0,100,100,0,0,1,{outline_width},0,2,10,10,{margin_v},1
+Style: Default,Arial,{font_size},{ass_font_color},&H000000FF,{ass_outline_color},{ass_back_color},-1,0,0,0,100,100,0,0,{border_style},{outline_width},0,2,10,10,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     
+    prev_end_sec = 0.0
     for block in blocks:
         lines = block.split('\n')
         if len(lines) >= 3:
@@ -106,6 +110,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if time_match:
                 start_sec = time_to_seconds(time_match.group(1)) / speed
                 end_sec = time_to_seconds(time_match.group(2)) / speed
+                
+                prev_end_sec = end_sec
                 
                 start_ass = seconds_to_ass_time(start_sec)
                 end_ass = seconds_to_ass_time(end_sec)
@@ -141,25 +147,31 @@ def process_video(video_path, dubbed_audio_path, srt_path, output_path, bg_volum
     try:
         # Chuẩn bị input
         video_input = ffmpeg.input(video_path)
-        audio_input = ffmpeg.input(dubbed_audio_path)
         
         # Audio Processing
         if base_audio_path and os.path.exists(base_audio_path):
             bg_audio = ffmpeg.input(base_audio_path).audio.filter('volume', bg_volume)
         else:
             bg_audio = video_input.audio.filter('volume', bg_volume)
-        dub_audio = audio_input.audio
+            
+        audio_inputs = [bg_audio]
         
-        audio_inputs = [bg_audio, dub_audio]
+        if dubbed_audio_path and os.path.exists(dubbed_audio_path):
+            audio_input = ffmpeg.input(dubbed_audio_path)
+            dub_audio = audio_input.audio
+            audio_inputs.append(dub_audio)
         
         # Thêm BGM nếu có
         if bgm_cfg and bgm_cfg.get("path") and os.path.exists(bgm_cfg["path"]):
             bgm_audio = ffmpeg.input(bgm_cfg["path"]).audio.filter('volume', bgm_cfg.get("vol", 0.1))
             audio_inputs.append(bgm_audio)
             
-        mixed_audio = ffmpeg.filter(audio_inputs, 'amix', inputs=len(audio_inputs), duration='longest')
-        # Tăng volume tổng thể (vì amix làm giảm volume)
-        mixed_audio = mixed_audio.filter('volume', float(len(audio_inputs)))
+        if len(audio_inputs) > 1:
+            mixed_audio = ffmpeg.filter(audio_inputs, 'amix', inputs=len(audio_inputs), duration='longest')
+            # Tăng volume tổng thể (vì amix làm giảm volume)
+            mixed_audio = mixed_audio.filter('volume', float(len(audio_inputs)))
+        else:
+            mixed_audio = audio_inputs[0]
         
         if speed != 1.0:
             mixed_audio = mixed_audio.filter('atempo', speed)
@@ -174,11 +186,6 @@ def process_video(video_path, dubbed_audio_path, srt_path, output_path, bg_volum
         fps_parts = fps_str.split('/')
         video_fps = float(fps_parts[0]) / float(fps_parts[1]) if len(fps_parts) == 2 and float(fps_parts[1]) != 0 else 25
         
-        # Convert SRT to ASS
-        ass_path = os.path.join("temp", "render_subtitles.ass")
-        srt_to_ass(srt_path, ass_path, video_w, video_h, font_size, font_color, outline_color, outline_width, sub_margin_v, speed=speed)
-        ass_filter_path = ass_path.replace('\\', '/')    
-        
         video_stream = video_input.video
         
         # 1. Color EQ (Sáng, Tương phản, Bão hoà)
@@ -187,10 +194,12 @@ def process_video(video_path, dubbed_audio_path, srt_path, output_path, bg_volum
             c = color_eq.get('contrast', 1.0)
             s = color_eq.get('saturation', 1.0)
             if b != 0.0 or c != 1.0 or s != 1.0:
+                print(f"[Tiến trình] Áp dụng Color EQ: Sáng={b}, Tương phản={c}, Bão hòa={s}")
                 video_stream = video_stream.filter('eq', brightness=b, contrast=c, saturation=s)
                 
         # 2. Blur
         if blur_box:
+            print("[Tiến trình] Đang áp dụng che mờ (Blur) khu vực tùy chỉnh...")
             if 'x_pct' in blur_box:
                 x = int(blur_box.get('x_pct', 0) * video_w)
                 y = int(blur_box.get('y_pct', 0) * video_h)
@@ -202,13 +211,17 @@ def process_video(video_path, dubbed_audio_path, srt_path, output_path, bg_volum
             split = video_stream.split()
             v_main = split[0]
             v_blur = split[1]
-            blurred_box = v_blur.crop(x, y, w, h).filter('boxblur', luma_radius=20, luma_power=2, chroma_radius=20, chroma_power=2)
+            safe_radius = min(w, h) // 4
+            if safe_radius > 20: safe_radius = 20
+            if safe_radius < 1: safe_radius = 1
+            blurred_box = v_blur.crop(x, y, w, h).filter('boxblur', luma_radius=safe_radius, luma_power=2, chroma_radius=safe_radius, chroma_power=2)
             video_stream = ffmpeg.overlay(v_main, blurred_box, x=x, y=y)
             
         # 3. Zoom (Crop tĩnh & Auto Dynamic)
         zoom_pct = zoom_cfg.get("percent", 0)
         if zoom_pct > 0:
             if zoom_cfg.get("mode") == "Động (Auto Zoom)":
+                print(f"[Tiến trình] Áp dụng Auto Zoom động ({zoom_pct}%)")
                 static_t = zoom_cfg.get("static_time", 2.0)
                 dyn_t = zoom_cfg.get("dyn_time", 1.0)
                 cycle = static_t + dyn_t
@@ -217,6 +230,7 @@ def process_video(video_path, dubbed_audio_path, srt_path, output_path, bg_volum
                 z_expr = f"if(lt(mod(in_time,{cycle}),{static_t}),1.0,{1 + zoom_pct/100.0})"
                 video_stream = video_stream.filter('zoompan', z=z_expr, x='iw/2-(iw/zoom/2)', y='ih/2-(ih/zoom/2)', d=1, s=f"{video_w}x{video_h}", fps=video_fps)
             else:
+                print(f"[Tiến trình] Áp dụng Cắt viền tĩnh ({zoom_pct}%)")
                 crop_w = video_w * (1 - zoom_pct/100.0)
                 crop_h = video_h * (1 - zoom_pct/100.0)
                 crop_x = (video_w - crop_w) / 2
@@ -225,11 +239,69 @@ def process_video(video_path, dubbed_audio_path, srt_path, output_path, bg_volum
             
         # 4. Flip
         if flip:
+            print("[Tiến trình] Áp dụng Lật ngang video (H-Flip)")
             video_stream = video_stream.filter('hflip')
             
         # 5. Speed (Video)
         if speed != 1.0:
+            print(f"[Tiến trình] Tăng tốc độ video: {speed}x")
             video_stream = video_stream.filter('setpts', f"{1.0/speed}*PTS")
+            
+        # 5.5. Aspect Ratio (Khung hình)
+        aspect_ratio = adv_config.get("aspect_ratio", "Giữ nguyên (Original)")
+        if aspect_ratio != "Giữ nguyên (Original)":
+            print(f"[Tiến trình] Chuyển đổi khung hình: {aspect_ratio}")
+            target_w, target_h = video_w, video_h
+            if "9:16" in aspect_ratio:
+                target_w = int(video_h * 9 / 16)
+                target_w -= target_w % 2
+            elif "1:1" in aspect_ratio:
+                target_w = video_h
+            elif "16:9" in aspect_ratio:
+                target_w = int(video_h * 16 / 9)
+                target_w -= target_w % 2
+                
+            if "Viền mờ" in aspect_ratio:
+                split_ar = video_stream.split()
+                bg = split_ar[0].filter('scale', w=target_w, h=target_h, force_original_aspect_ratio='increase').filter('crop', target_w, target_h).filter('boxblur', luma_radius=30, luma_power=2)
+                fg = split_ar[1].filter('scale', w=target_w, h=target_h, force_original_aspect_ratio='decrease')
+                video_stream = ffmpeg.overlay(bg, fg, x="(main_w-overlay_w)/2", y="(main_h-overlay_h)/2")
+            elif "Cắt giữa" in aspect_ratio:
+                video_stream = video_stream.filter('scale', w=target_w, h=target_h, force_original_aspect_ratio='increase').filter('crop', target_w, target_h)
+            
+            video_w, video_h = target_w, target_h
+
+        # Convert SRT to ASS (Dùng kích thước video mới nhất)
+        ass_path = os.path.join("temp", "render_subtitles.ass")
+        border_style = adv_config.get("sub_border_style", 1) if adv_config else 1
+        srt_to_ass(srt_path, ass_path, video_w, video_h, font_size, font_color, outline_color, outline_width, sub_margin_v, speed=speed, border_style=border_style)
+        ass_filter_path = ass_path.replace('\\', '/')
+            
+        # 5.6 Bo góc Video
+        round_cfg = adv_config.get("round", {})
+        if round_cfg.get("enabled", False):
+            radius = round_cfg.get("radius", 60)
+            print(f"[Tiến trình] Áp dụng Bo tròn 4 góc (Bán kính: {radius})")
+            
+            from PIL import Image, ImageDraw, ImageOps
+            
+            # Tạo mask đen trắng cho vùng bo tròn (Trắng = Giữ lại, Đen = Cắt bỏ)
+            mask = Image.new("L", (video_w, video_h), 0)
+            draw = ImageDraw.Draw(mask)
+            draw.rounded_rectangle((0, 0, video_w, video_h), radius=radius, fill=255)
+            
+            # Đảo ngược mask: Trắng (255) ở 4 góc, Đen (0) ở giữa
+            inv_mask = ImageOps.invert(mask)
+            
+            # Tạo nền đen thui và áp dụng alpha
+            corner_overlay = Image.new("RGBA", (video_w, video_h), (0, 0, 0, 255))
+            corner_overlay.putalpha(inv_mask)
+            
+            mask_path = os.path.join("temp", "rounded_mask.png")
+            corner_overlay.save(mask_path)
+            
+            mask_input = ffmpeg.input(mask_path)
+            video_stream = ffmpeg.overlay(video_stream, mask_input, x=0, y=0)
             
         # 6. Lớp phủ (Overlay mờ chống MD5)
         if overlay_cfg and overlay_cfg.get("path") and os.path.exists(overlay_cfg["path"]):
@@ -239,45 +311,107 @@ def process_video(video_path, dubbed_audio_path, srt_path, output_path, bg_volum
             
         # 7. Logo Overlay (Motion & Scale)
         if logo_cfg and logo_cfg.get("path") and os.path.exists(logo_cfg["path"]):
+            pos = logo_cfg.get("pos", "Góc trên Trái")
+            print(f"[Tiến trình] Chèn Logo tĩnh chống quét (Vị trí: {pos}, Mờ: 10%)")
             logo_scale = logo_cfg.get("scale", 0.2)
             lw = int(video_w * logo_scale)
-            # scale h=-1 có thể gây lỗi với số lẻ, nên dùng biểu thức tính tỷ lệ. Hoặc để FFmpeg tự chọn
             logo_img = ffmpeg.input(logo_cfg["path"]).filter('format', 'rgba')
             
-            opacity = logo_cfg.get("opacity", 1.0)
-            if opacity < 1.0:
-                logo_img = logo_img.filter('colorchannelmixer', aa=opacity)
+            # Ép cứng độ mờ 10% (Static Logo mờ 10%)
+            opacity = 0.1
+            logo_img = logo_img.filter('colorchannelmixer', aa=opacity)
                 
             logo_img = logo_img.filter('scale', w=lw, h=-1)
             
             pos = logo_cfg.get("pos", "Góc trên Trái")
-            move = logo_cfg.get("move", "Đứng yên")
             padding = 20
             
-            if move == "Trôi nổi (Lissajous)":
-                overlay_x = f"(main_w-overlay_w)/2 + ((main_w-overlay_w)/2 - {padding}) * sin(t*0.5)"
-                overlay_y = f"(main_h-overlay_h)/2 + ((main_h-overlay_h)/2 - {padding}) * cos(t*0.7)"
-            elif move == "Nảy (DVD Bounce)":
-                overlay_x = f"abs(mod(t*150, 2*(main_w-overlay_w)) - (main_w-overlay_w))"
-                overlay_y = f"abs(mod(t*200, 2*(main_h-overlay_h)) - (main_h-overlay_h))"
-            else:
-                if pos == "Góc trên Trái": overlay_x, overlay_y = padding, padding
-                elif pos == "Góc trên Phải": overlay_x, overlay_y = f"main_w-overlay_w-{padding}", padding
-                elif pos == "Góc dưới Trái": overlay_x, overlay_y = padding, f"main_h-overlay_h-{padding}"
-                elif pos == "Góc dưới Phải": overlay_x, overlay_y = f"main_w-overlay_w-{padding}", f"main_h-overlay_h-{padding}"
-                else: overlay_x, overlay_y = "(main_w-overlay_w)/2", "(main_h-overlay_h)/2"
+            if pos == "Góc trên Trái": overlay_x, overlay_y = padding, padding
+            elif pos == "Góc trên Phải": overlay_x, overlay_y = f"main_w-overlay_w-{padding}", padding
+            elif pos == "Góc dưới Trái": overlay_x, overlay_y = padding, f"main_h-overlay_h-{padding}"
+            elif pos == "Góc dưới Phải": overlay_x, overlay_y = f"main_w-overlay_w-{padding}", f"main_h-overlay_h-{padding}"
+            else: overlay_x, overlay_y = "(main_w-overlay_w)/2", "(main_h-overlay_h)/2"
             
             video_stream = ffmpeg.overlay(video_stream, logo_img, x=overlay_x, y=overlay_y)
+            
+        # 7.5 Lớp phủ nhiễu động (Temporal Noise - Chống MD5 & Quét Hình Ảnh)
+        noise_cfg = adv_config.get("noise", {})
+        if noise_cfg.get("enabled", False):
+            strength = noise_cfg.get("strength", 3)
+            print(f"[Tiến trình] Áp dụng Nhiễu hạt động (Temporal Noise, Cường độ: {strength})")
+            video_stream = video_stream.filter('noise', alls=strength, allf='t+u')
             
         # 8. Subtitles (ASS)
         if enable_sub:
             video_stream = video_stream.filter('subtitles', ass_filter_path)
         
-        # Ghép và xuất file (Dùng preset ultrafast)
-        out = ffmpeg.output(video_stream, mixed_audio, output_path, vcodec='libx264', preset='ultrafast', acodec='aac', audio_bitrate='192k')
-        ffmpeg.run(out, overwrite_output=True, quiet=True)
+        # Đọc cấu hình phần cứng từ giao diện
+        render_hw = adv_config.get("render_hw", "Tự động quét GPU (Khuyên dùng)") if adv_config else "Tự động quét GPU (Khuyên dùng)"
         
-        print(f"Finished processing! Output saved to {output_path}")
+        if render_hw == "Chỉ dùng CPU (Chậm hơn)":
+            codecs_to_try = [
+                ('libx264', 'CPU', {'vcodec': 'libx264', 'preset': 'faster', 'crf': 24})
+            ]
+            print("Đã chọn chế độ: CHỈ DÙNG CPU. Bỏ qua quét GPU.")
+        else:
+            # Ghép và xuất file với cơ chế Auto-Fallback linh hoạt cho mọi phần cứng
+            codecs_to_try = [
+                ('h264_nvenc', 'GPU NVIDIA', {'vcodec': 'h264_nvenc', 'preset': 'fast', 'cq': 24}),
+                ('h264_qsv', 'GPU Intel', {'vcodec': 'h264_qsv', 'preset': 'faster', 'global_quality': 24}),
+                ('h264_amf', 'GPU AMD', {'vcodec': 'h264_amf'}),
+                ('libx264', 'CPU', {'vcodec': 'libx264', 'preset': 'faster', 'crf': 24})
+            ]
+
+        success = False
+        last_error = None
+        for codec_name, hw_name, codec_kwargs in codecs_to_try:
+            try:
+                print(f"Đang thử xuất video bằng {hw_name} ({codec_name})...")
+                out_kwargs = {
+                    'acodec': 'aac',
+                    'audio_bitrate': '128k', # 128k là dư sức chuẩn với TikTok, giúp giảm nhẹ file
+                    'pix_fmt': 'yuv420p',    # Bắt buộc để tương thích mobile 100% và giảm dung lượng
+                    'map_metadata': '-1'
+                }
+                out_kwargs.update(codec_kwargs)
+                
+                # Bơm siêu dữ liệu giả (Fake iPhone 15 Pro Max)
+                if adv_config and adv_config.get("fake_iphone", False):
+                    import random
+                    import datetime
+                    # Tạo ngày giờ ngẫu nhiên trong vòng 7 ngày qua để file trông như mới quay
+                    now = datetime.datetime.now()
+                    random_days = random.randint(0, 7)
+                    random_hours = random.randint(0, 23)
+                    fake_date = now - datetime.timedelta(days=random_days, hours=random_hours)
+                    creation_time = fake_date.strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+                    
+                    if codec_name == codecs_to_try[0][0]:
+                        print(f"[Tiến trình] Bơm Fake Metadata (Apple iPhone 15 Pro Max, Quay lúc: {fake_date.strftime('%d/%m/%Y %H:%M')})")
+                    
+                    out_kwargs.update({
+                        'metadata': f'creation_time={creation_time}',
+                        'metadata:s:v:0': 'handler_name=Core Media Video',
+                        'metadata:s:a:0': 'handler_name=Core Media Audio',
+                        'movflags': '+faststart'
+                    })
+                
+                out = ffmpeg.output(video_stream, mixed_audio, output_path, **out_kwargs)
+                print(f"-> Đang tiến hành Render tĩnh bằng {hw_name}... (Quá trình này chạy ngầm và sẽ mất vài phút tùy độ dài video. Xin vui lòng không tắt Tool!)")
+                ffmpeg.run(out, overwrite_output=True, quiet=True)
+                
+                print(f"-> THÀNH CÔNG: Đã xuất video bằng {hw_name}! Lưu tại {output_path}")
+                success = True
+                break
+            except ffmpeg.Error as e:
+                print(f"-> KHÔNG HỖ TRỢ: {hw_name}. Tự động bỏ qua và thử phương án tiếp theo...")
+                last_error = e
+        
+        if not success:
+            print("Toàn bộ phương án render đều thất bại!")
+            if last_error:
+                raise last_error
+            
         return output_path
     except ffmpeg.Error as e:
         print("FFmpeg error:", e.stderr.decode('utf-8') if e.stderr else str(e))

@@ -70,15 +70,96 @@ def transcribe_audio(audio_path, model_size="base", output_dir="temp", overwrite
     model = _cached_whisper_model
     
     print(f"Transcribing {audio_path}...")
-    segments, info = model.transcribe(audio_path, beam_size=5)
+    
+    class DummySegment:
+        def __init__(self, start, end, text):
+            self.start = start
+            self.end = end
+            self.text = text
+            
+    from pydub import AudioSegment
+    import math
+    audio = AudioSegment.from_file(audio_path)
+    chunk_length_ms = 5 * 60 * 1000 # 5 minutes
+    
+    segments_all = []
+    language_detected = "unknown"
+    
+    if len(audio) <= chunk_length_ms:
+        segments, info = model.transcribe(
+            audio_path, 
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500),
+            word_timestamps=True
+        )
+        language_detected = info.language
+        for seg in segments:
+            actual_end = seg.end
+            if hasattr(seg, 'words') and seg.words:
+                # Cắt bỏ khoảng lặng thừa bằng cách lấy timestamp của từ cuối cùng
+                actual_end = seg.words[-1].end
+                
+            segments_all.append(DummySegment(seg.start, actual_end, seg.text))
+    else:
+        print("Audio is long. Splitting into chunks to prevent MemoryError...")
+        for i in range(math.ceil(len(audio) / chunk_length_ms)):
+            chunk = audio[i * chunk_length_ms : (i+1) * chunk_length_ms]
+            chunk_path = audio_path.replace(".wav", f"_part{i}.wav")
+            chunk.export(chunk_path, format="wav")
+            
+            print(f"  -> Transcribing chunk {i+1}...")
+            chunk_segments, info = model.transcribe(
+                chunk_path, 
+                beam_size=5,
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=500),
+                word_timestamps=True
+            )
+            if i == 0:
+                language_detected = info.language
+                
+            offset_seconds = (i * chunk_length_ms) / 1000.0
+            for seg in chunk_segments:
+                actual_end = seg.end
+                if hasattr(seg, 'words') and seg.words:
+                    actual_end = seg.words[-1].end
+                    
+                segments_all.append(DummySegment(
+                    start=seg.start + offset_seconds,
+                    end=actual_end + offset_seconds,
+                    text=seg.text
+                ))
+            
+            if os.path.exists(chunk_path):
+                os.remove(chunk_path)
     
     base_name = os.path.splitext(os.path.basename(audio_path))[0]
     srt_path = os.path.join(output_dir, f"{base_name}.srt")
     
+    # Bộ lọc chống ảo giác (Whisper Hallucination)
+    filtered_segments = []
+    prev_text = ""
+    repeat_count = 0
+    
+    for seg in segments_all:
+        text = seg.text.strip()
+        if not text: continue
+        
+        if text == prev_text:
+            repeat_count += 1
+            if repeat_count >= 2: # Nếu 1 câu y hệt lặp lại tới lần thứ 3 -> Bỏ qua
+                continue
+        else:
+            repeat_count = 0
+            prev_text = text
+            
+        filtered_segments.append(seg)
+
     # Write SRT
-    print("Writing SRT file...")
+    print(f"Writing SRT file... (Filtered {len(segments_all) - len(filtered_segments)} hallucinated segments)")
     with open(srt_path, "w", encoding="utf-8-sig") as f:
-        for i, segment in enumerate(segments, start=1):
+        for i, segment in enumerate(filtered_segments, start=1):
             start_time = format_timestamp(segment.start)
             end_time = format_timestamp(segment.end)
             f.write(f"{i}\n")
