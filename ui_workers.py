@@ -539,7 +539,7 @@ class WorkerAIFactory(QThread):
     log = pyqtSignal(str)
     work_done = pyqtSignal(bool, object)
 
-    def __init__(self, mode, input_dir, output_dir, num_videos, clip_duration, config, original_script="", image_path="", keyword="", source_type="youtube", use_ai_spin=True):
+    def __init__(self, mode, input_dir, output_dir, num_videos, clip_duration, config, original_script="", image_path="", keyword="", source_type="youtube", use_ai_spin=True, multi_voice=False):
         super().__init__()
         self.mode = mode
         self.input_dir = input_dir
@@ -552,6 +552,7 @@ class WorkerAIFactory(QThread):
         self.keyword = keyword
         self.source_type = source_type
         self.use_ai_spin = use_ai_spin
+        self.multi_voice = multi_voice
 
     def run(self):
         try:
@@ -580,7 +581,8 @@ class WorkerAIFactory(QThread):
                         new_script = spin_script(
                             f"Sản phẩm: {self.keyword}", 
                             gemini_key, 
-                            prompt_style="Hãy viết 1 đoạn kịch bản lồng tiếng review bán hàng ngắn (3-4 câu, 15-20s) bằng tiếng Việt cực kỳ hấp dẫn, giật tít cho sản phẩm này trên TikTok."
+                            prompt_style="Hãy viết 1 đoạn kịch bản lồng tiếng review bán hàng ngắn (3-4 câu, 15-20s) bằng tiếng Việt cực kỳ hấp dẫn, giật tít cho sản phẩm này trên TikTok.",
+                            multi_voice=self.multi_voice
                         )
                         self.log.emit(f"Kịch bản AI sinh ra: {new_script}")
                     else:
@@ -738,7 +740,8 @@ class WorkerAIFactory(QThread):
                 new_script = spin_script(
                     self.original_script, 
                     gemini_key, 
-                    prompt_style=self.config.get("gemini_prompt", "Hấp dẫn, kịch tính, chốt sale")
+                    prompt_style=self.config.get("gemini_prompt", "Hấp dẫn, kịch tính, chốt sale"),
+                    multi_voice=self.multi_voice
                 )
                 
                 self.progress.emit(100, "Xào kịch bản hoàn tất!")

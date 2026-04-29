@@ -187,6 +187,7 @@ def process_video(video_path, dubbed_audio_path, srt_path, output_path, bg_volum
             
         audio_inputs = [bg_audio]
         
+        dub_audio = None
         if dubbed_audio_path and os.path.exists(dubbed_audio_path):
             audio_input = ffmpeg.input(dubbed_audio_path)
             dub_audio = audio_input.audio
@@ -195,6 +196,11 @@ def process_video(video_path, dubbed_audio_path, srt_path, output_path, bg_volum
         # Thêm BGM nếu có
         if bgm_cfg and bgm_cfg.get("path") and os.path.exists(bgm_cfg["path"]):
             bgm_audio = ffmpeg.input(bgm_cfg["path"]).audio.filter('volume', bgm_cfg.get("vol", 0.1))
+            
+            # Tính năng Auto-Ducking: Dìm nhạc nền khi có tiếng người
+            if dub_audio is not None and bgm_cfg.get("auto_ducking", True):
+                bgm_audio = ffmpeg.filter([bgm_audio, dub_audio], 'sidechaincompress', threshold=0.08, ratio=5.0, attack=50, release=500)
+                
             audio_inputs.append(bgm_audio)
             
         if len(audio_inputs) > 1:

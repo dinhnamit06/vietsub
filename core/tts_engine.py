@@ -200,8 +200,29 @@ def generate_tts_for_srt(srt_path, voice="tiktok:BV074_streaming", output_dir="t
     
     # Bước 1: Chuẩn bị danh sách tác vụ
     tasks = []
+    
+    # Định nghĩa cặp giọng phụ (Secondary Voice)
+    voice_pairs = {
+        "Nam CapCut (VN)": "Nữ CapCut (VN)",
+        "Nữ CapCut (VN)": "Nam CapCut (VN)",
+        "Chị Google (VN)": "Nam Minh (VN)",
+        "Nam Minh (VN)": "Chị Google (VN)"
+    }
+    secondary_voice = voice_pairs.get(voice, "Nữ CapCut (VN)")
+    
     for i, sub in enumerate(audio_subtitles):
-        text = clean_tts_text(sub['text'])
+        raw_text = sub['text'].strip()
+        current_voice = voice
+        
+        if "[Nam]:" in raw_text or "[Nữ]:" in raw_text or "Nam:" in raw_text or "Nữ:" in raw_text:
+            if raw_text.startswith("[Nam]:") or raw_text.startswith("Nam:"):
+                raw_text = raw_text.replace("[Nam]:", "").replace("Nam:", "").strip()
+                current_voice = voice if "Nam" in voice else secondary_voice
+            elif raw_text.startswith("[Nữ]:") or raw_text.startswith("Nữ:"):
+                raw_text = raw_text.replace("[Nữ]:", "").replace("Nữ:", "").strip()
+                current_voice = voice if "Nữ" in voice or "Chị" in voice else secondary_voice
+                
+        text = clean_tts_text(raw_text)
         
         if not text:
             continue
@@ -225,7 +246,8 @@ def generate_tts_for_srt(srt_path, voice="tiktok:BV074_streaming", output_dir="t
                 'text': text,
                 'path': temp_audio_file,
                 'speed_rate': speed_rate,
-                'start_ms': start_ms
+                'start_ms': start_ms,
+                'voice': current_voice
             })
             
     # Tạo TTS song song bằng ThreadPoolExecutor
@@ -240,7 +262,7 @@ def generate_tts_for_srt(srt_path, voice="tiktok:BV074_streaming", output_dir="t
         def process_task(task_info):
             nonlocal completed_tasks
             try:
-                _generate_audio(task_info['text'], voice, task_info['path'], tiktok_session_id=tiktok_session_id)
+                _generate_audio(task_info['text'], task_info['voice'], task_info['path'], tiktok_session_id=tiktok_session_id)
             except Exception as e:
                 with lock:
                     failed_segments.append(task_info)

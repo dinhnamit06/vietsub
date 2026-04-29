@@ -625,6 +625,11 @@ class AutoVietsubApp(QMainWindow):
         self.chk_use_ai_spin.setToolTip("Nếu TẮT: Video sẽ giữ nguyên âm thanh và độ dài gốc, chỉ tự động chạy bộ lọc chống Reup siêu ẩn (Dành cho Reup thuần túy).")
         v_img2vid.addWidget(self.chk_use_ai_spin)
         
+        self.chk_multi_voice_ai = QCheckBox("Lồng Tiếng Đa Nhân Vật (Hội thoại Nam/Nữ)")
+        self.chk_multi_voice_ai.setChecked(False)
+        self.chk_multi_voice_ai.setToolTip("Yêu cầu AI viết kịch bản dạng hội thoại giữa 2 người.")
+        v_img2vid.addWidget(self.chk_multi_voice_ai)
+        
         h_img_src = QHBoxLayout()
         h_img_src.addWidget(QLabel("Nguồn Video:"))
         self.fac_img_source = QComboBox()
@@ -1214,6 +1219,10 @@ class AutoVietsubApp(QMainWindow):
         self.slider_bgm_vol.setRange(1, 100); self.slider_bgm_vol.setValue(10)
         v_logo.addRow("Âm lượng Nhạc:", self.slider_bgm_vol)
         
+        self.chk_auto_ducking = QCheckBox("Tự động nhỏ nhạc nền khi có giọng đọc (Auto-Ducking)")
+        self.chk_auto_ducking.setChecked(True)
+        v_logo.addRow("", self.chk_auto_ducking)
+        
         scroll_layout.addWidget(g_logo)
         scroll_layout.addStretch()
         
@@ -1279,6 +1288,8 @@ class AutoVietsubApp(QMainWindow):
         self.slider_logo_scale.setValue(self.config.get("adv_logo_scale", 20))
         self.slider_logo_opacity.setValue(self.config.get("adv_logo_op", 80))
         self.chk_bgm.setChecked(self.config.get("adv_bgm_en", False))
+        if hasattr(self, 'chk_auto_ducking'):
+            self.chk_auto_ducking.setChecked(self.config.get("auto_ducking", True))
         self.slider_bgm_vol.setValue(self.config.get("adv_bgm_vol", 10))
         
         h_hw = QHBoxLayout()
@@ -1450,6 +1461,8 @@ class AutoVietsubApp(QMainWindow):
             self.config["adv_logo_scale"] = self.slider_logo_scale.value()
             self.config["adv_logo_op"] = self.slider_logo_opacity.value()
             self.config["adv_bgm_en"] = self.chk_bgm.isChecked()
+            if hasattr(self, 'chk_auto_ducking'):
+                self.config["auto_ducking"] = self.chk_auto_ducking.isChecked()
             self.config["adv_bgm_path"] = getattr(self, "bgm_path", "")
             self.config["adv_bgm_vol"] = self.slider_bgm_vol.value()
         except AttributeError:
@@ -1721,7 +1734,8 @@ class AutoVietsubApp(QMainWindow):
             image_path=img_path,
             keyword=keyword,
             source_type=source_type,
-            use_ai_spin=use_ai_spin
+            use_ai_spin=use_ai_spin,
+            multi_voice=self.chk_multi_voice_ai.isChecked() if hasattr(self, 'chk_multi_voice_ai') else False
         )
         self.worker_fac_img.progress.connect(self.update_fac_progress)
         self.worker_fac_img.log.connect(self.append_fac_log)
@@ -2041,7 +2055,8 @@ class AutoVietsubApp(QMainWindow):
             },
             "bgm": {
                 "path": self.bgm_path if self.chk_bgm.isChecked() else "",
-                "vol": self.slider_bgm_vol.value() / 100.0
+                "vol": self.slider_bgm_vol.value() / 100.0,
+                "auto_ducking": self.chk_auto_ducking.isChecked() if hasattr(self, 'chk_auto_ducking') else True
             },
             "enable_sub": self.chk_enable_sub.isChecked(),
             "bouncing_sub": self.chk_bouncing_sub.isChecked() if hasattr(self, 'chk_bouncing_sub') else False,
@@ -2433,7 +2448,8 @@ class AutoVietsubApp(QMainWindow):
             },
             "bgm": {
                 "path": self.bgm_path if self.chk_bgm.isChecked() else "",
-                "vol": self.slider_bgm_vol.value() / 100.0
+                "vol": self.slider_bgm_vol.value() / 100.0,
+                "auto_ducking": self.chk_auto_ducking.isChecked() if hasattr(self, 'chk_auto_ducking') else True
             }
         }
         

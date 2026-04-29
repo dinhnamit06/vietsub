@@ -4,7 +4,7 @@ import time
 import subprocess
 from core.translator import _translate_batch_gemini
 
-def spin_script(original_text, gemini_api_key, prompt_style="Hấp dẫn, kịch tính, chốt sale"):
+def spin_script(original_text, gemini_api_key, prompt_style="Hấp dẫn, kịch tính, chốt sale", multi_voice=False):
     """
     Sử dụng Gemini để viết lại (spin) kịch bản bán hàng.
     """
@@ -15,6 +15,10 @@ def spin_script(original_text, gemini_api_key, prompt_style="Hấp dẫn, kịch
     from google import genai
     client = genai.Client(api_key=gemini_api_key)
     
+    multi_voice_instruction = ""
+    if multi_voice:
+        multi_voice_instruction = "\n4. ĐẶC BIỆT: Viết kịch bản dưới dạng HỘI THOẠI luân phiên giữa 2 người (1 Nam, 1 Nữ). Bắt buộc phải có tiền tố '[Nam]:' và '[Nữ]:' ở đầu mỗi câu thoại để phân biệt người nói. Ví dụ:\n[Nam]: ...\n[Nữ]: ..."
+
     prompt = f"""Bạn là một copywriter chuyên nghiệp trên TikTok/Shorts.
 Nhiệm vụ: Viết lại kịch bản dưới đây thành một phiên bản hoàn toàn mới nhưng giữ nguyên thông điệp cốt lõi.
 Phong cách yêu cầu: {prompt_style}
@@ -22,7 +26,7 @@ Phong cách yêu cầu: {prompt_style}
 QUAN TRỌNG:
 1. Độ dài của kịch bản mới phải TƯƠNG ĐƯƠNG với kịch bản cũ (không được dài hơn quá 10%).
 2. Không dùng những từ ngữ bị cấm trên TikTok.
-3. Trả về trực tiếp nội dung kịch bản, không giải thích, không in lời chào.
+3. Trả về trực tiếp nội dung kịch bản, không giải thích, không in lời chào.{multi_voice_instruction}
 
 Kịch bản gốc:
 {original_text}
